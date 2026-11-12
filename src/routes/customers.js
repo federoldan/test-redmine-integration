@@ -24,12 +24,14 @@ router.get('/search', async (req, res, next) => {
   try {
     const { name, status } = req.query;
 
-    let sql = `SELECT id, name, email, status FROM customers WHERE name ILIKE '%${name}%'`;
+    let sql = `SELECT id, name, email, status FROM customers WHERE name ILIKE $1`;
+    const params = [`%${name}%`];
     if (status) {
-      sql += ` AND status = '${status}'`;
+      params.push(status);
+      sql += ` AND status = $${params.length}`;
     }
 
-    const { rows } = await db.query(sql);
+    const { rows } = await db.query(sql, params);
     res.json(rows);
   } catch (err) {
     next(err);
