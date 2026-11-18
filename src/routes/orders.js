@@ -1,11 +1,14 @@
 const express = require('express');
 const db = require('../db');
 const { canAccessCustomer } = require('../auth');
+const { parsePagination } = require('../pagination');
 
 const router = express.Router();
 
 const MAX_ITEMS = 100;
 const MAX_QUANTITY = 10000;
+
+class BadRequestError extends Error {}
 
 router.get('/customer/:customerId', async (req, res, next) => {
   try {
@@ -13,8 +16,7 @@ router.get('/customer/:customerId', async (req, res, next) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const { limit, offset } = parsePagination(req.query);
 
     const { rows } = await db.query(
       `SELECT o.id, o.total, o.status, o.created_at
@@ -29,6 +31,13 @@ router.get('/customer/:customerId', async (req, res, next) => {
     next(err);
   }
 });
+
+function isValidCustomerId(value) {
+  return (
+    (Number.isInteger(value) && value > 0) ||
+    (typeof value === 'string' && /^[1-9]\d*$/.test(value))
+  );
+}
 
 function validateItems(items) {
   if (!Array.isArray(items) || items.length === 0) {
@@ -51,22 +60,27 @@ function validateItems(items) {
   return null;
 }
 
+// Convierte un numeric de Postgres (string) a centavos enteros para evitar errores de float.
+function toCents(price) {
+  return Math.round(Number(price) * 100);
+}
+
 router.post('/', async (req, res, next) => {
-  const { customerId, items } = req.body;
-
-  if (!customerId) {
-    return res.status(400).json({ error: 'customerId is required' });
-  }
-  const itemsError = validateItems(items);
-  if (itemsError) {
-    return res.status(400).json({ error: itemsError });
-  }
-  if (!canAccessCustomer(req.user, customerId)) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-
   let client;
   try {
+    const { customerId, items } = req.body || {};
+
+    if (!isValidCustomerId(customerId)) {
+      return res.status(400).json({ error: 'customerId must be a positive integer' });
+    }
+    const itemsError = validateItems(items);
+    if (itemsError) {
+      return res.status(400).json({ error: itemsError });
+    }
+    if (!canAccessCustomer(req.user, customerId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
     client = await db.pool.connect();
     await client.query('BEGIN');
 
@@ -76,22 +90,23 @@ router.post('/', async (req, res, next) => {
       'SELECT id, price FROM products WHERE id = ANY($1::int[])',
       [productIds]
     );
-    const priceById = new Map(products.map((p) => [p.id, Number(p.price)]));
-    const missing = productIds.filter((id) => !priceById.has(id));
+    const centsById = new Map(products.map((p) => [p.id, toCents(p.price)]));
+    const missing = productIds.filter((id) => !centsById.has(id));
     if (missing.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: `unknown products: ${missing.join(', ')}` });
+      // El ROLLBACK lo hace el catch, protegido.
+      throw new BadRequestError(`unknown products: ${missing.join(', ')}`);
     }
 
     const lines = items.map((i) => ({
       productId: i.productId,
       quantity: i.quantity,
-      price: priceById.get(i.productId),
+      cents: centsById.get(i.productId),
     }));
-    const total = lines.reduce((sum, l) => sum + l.price * l.quantity, 0);
+    const totalCents = lines.reduce((sum, l) => sum + l.cents * l.quantity, 0);
+    const total = (totalCents / 100).toFixed(2);
 
     const { rows } = await client.query(
-      'INSERT INTO orders (customer_id, total, status) VALUES ($1, $2, $3) RETURNING id',
+      'INSERT INTO orders (customer_id, total, status) VALUES ($1, $2::numeric, $3) RETURNING id',
       [customerId, total, 'pending']
     );
     const orderId = rows[0].id;
@@ -104,7 +119,7 @@ router.post('/', async (req, res, next) => {
         orderId,
         lines.map((l) => l.productId),
         lines.map((l) => l.quantity),
-        lines.map((l) => l.price),
+        lines.map((l) => (l.cents / 100).toFixed(2)),
       ]
     );
 
@@ -117,6 +132,9 @@ router.post('/', async (req, res, next) => {
       } catch (rollbackErr) {
         console.error('ROLLBACK failed', rollbackErr);
       }
+    }
+    if (err instanceof BadRequestError) {
+      return res.status(400).json({ error: err.message });
     }
     next(err);
   } finally {

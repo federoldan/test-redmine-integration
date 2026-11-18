@@ -1,5 +1,6 @@
 const express = require('express');
 const db = require('../db');
+const { parsePagination } = require('../pagination');
 
 const router = express.Router();
 
@@ -8,7 +9,7 @@ const ALLOWED_SORT = ['name', 'created_at', 'email'];
 router.get('/', async (req, res, next) => {
   try {
     const sort = ALLOWED_SORT.includes(req.query.sort) ? req.query.sort : 'created_at';
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const { limit } = parsePagination(req.query);
 
     const { rows } = await db.query(
       `SELECT id, name, email, created_at FROM customers ORDER BY ${sort} DESC LIMIT $1`,
@@ -31,8 +32,7 @@ router.get('/search', async (req, res, next) => {
       return res.status(400).json({ error: 'status must be a string' });
     }
 
-    const limit = Math.min(Number(req.query.limit) || 50, 200);
-    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const { limit, offset } = parsePagination(req.query);
 
     // Escapar comodines de LIKE para que el usuario no los controle.
     // El índice trigram (migrations/001_customers_name_trgm.sql) evita el seq scan.
