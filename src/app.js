@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const { authenticate, requireAdmin } = require('./auth');
 const customersRouter = require('./routes/customers');
 const ordersRouter = require('./routes/orders');
 
@@ -9,8 +10,8 @@ app.use(express.json());
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.use('/api/customers', customersRouter);
-app.use('/api/orders', ordersRouter);
+app.use('/api/customers', authenticate, requireAdmin, customersRouter);
+app.use('/api/orders', authenticate, ordersRouter);
 
 app.use((err, req, res, next) => {
   console.error(err);

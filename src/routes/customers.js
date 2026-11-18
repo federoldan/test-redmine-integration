@@ -24,12 +24,27 @@ router.get('/search', async (req, res, next) => {
   try {
     const { name, status } = req.query;
 
+    if (typeof name !== 'string' || name.trim().length < 2) {
+      return res.status(400).json({ error: 'name is required (min 2 characters)' });
+    }
+    if (status !== undefined && typeof status !== 'string') {
+      return res.status(400).json({ error: 'status must be a string' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+    // Escapar comodines de LIKE para que el usuario no los controle.
+    // El índice trigram (migrations/001_customers_name_trgm.sql) evita el seq scan.
+    const pattern = `%${name.trim().replace(/[\\%_]/g, '\\$&')}%`;
     let sql = `SELECT id, name, email, status FROM customers WHERE name ILIKE $1`;
-    const params = [`%${name}%`];
+    const params = [pattern];
     if (status) {
       params.push(status);
       sql += ` AND status = $${params.length}`;
     }
+    params.push(limit, offset);
+    sql += ` ORDER BY name LIMIT $${params.length - 1} OFFSET $${params.length}`;
 
     const { rows } = await db.query(sql, params);
     res.json(rows);
