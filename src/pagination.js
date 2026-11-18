@@ -2,10 +2,11 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const MAX_OFFSET = 100000;
 
-// Devuelve un entero en [min, max]; cualquier valor no finito (NaN, Infinity) usa el default.
+// Devuelve un entero en [min, max]. Ausente, vacío, 0 o no finito (NaN, Infinity) usa el default.
 function clampInt(value, def, min, max) {
+  if (value === undefined || value === null || String(value).trim() === '') return def;
   const n = Math.trunc(Number(value));
-  if (!Number.isFinite(n)) return def;
+  if (!Number.isFinite(n) || n === 0) return def;
   return Math.min(Math.max(n, min), max);
 }
 
